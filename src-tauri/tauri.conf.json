@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui/nicegui/main/tauri.conf.json",
-  "productName": "Meeting Scribe",
-  "identifier": "com.meetingscribe.app",
+  "productName": "Sidekick2000",
+  "identifier": "com.sidekick2000.app",
   "version": "0.1.0",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Meeting Scribe",
+        "title": "Sidekick2000",
         "width": 720,
         "height": 900,
         "resizable": true,

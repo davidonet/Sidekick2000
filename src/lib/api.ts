@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { PipelineConfig, PipelineResult, PipelineStep } from "./types";
+import type { PipelineConfig, PipelineResult, PipelineStep, Settings } from "./types";
 
 export async function startRecording(): Promise<void> {
   await invoke("start_recording");
@@ -34,8 +34,12 @@ export async function openFile(path: string): Promise<void> {
   await invoke("open_file", { path });
 }
 
-export async function loadContextFile(name: string): Promise<string> {
-  return await invoke("load_context_file", { name });
+export async function getSettings(): Promise<Settings> {
+  return await invoke("get_settings");
+}
+
+export async function saveSettings(s: Settings): Promise<void> {
+  await invoke("save_settings", { s });
 }
 
 export function onPipelineProgress(

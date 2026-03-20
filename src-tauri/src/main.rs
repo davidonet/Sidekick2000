@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    meeting_scribe_lib::run()
+    sidekick2000_lib::run()
 }

@@ -4,6 +4,7 @@ mod export;
 mod github;
 mod merge;
 mod pipeline;
+mod settings;
 mod summarize;
 mod transcribe;
 
@@ -69,16 +70,44 @@ async fn run_pipeline(
     config: PipelineConfig,
     app: tauri::AppHandle,
 ) -> Result<pipeline::PipelineResult, String> {
-    pipeline::run(config, app)
+    // Load settings to get API keys (fallback to env vars)
+    let s = settings::load();
+
+    let groq_key = if !s.groq_api_key.is_empty() {
+        s.groq_api_key.clone()
+    } else {
+        std::env::var("GROQ_API_KEY")
+            .map_err(|_| "GROQ_API_KEY not set. Configure it in Settings or .env file.")?
+    };
+
+    let anthropic_key = if !s.anthropic_api_key.is_empty() {
+        s.anthropic_api_key.clone()
+    } else {
+        std::env::var("ANTHROPIC_API_KEY")
+            .map_err(|_| "ANTHROPIC_API_KEY not set. Configure it in Settings or .env file.")?
+    };
+
+    pipeline::run(config, groq_key, anthropic_key, app)
         .await
         .map_err(|e| format!("Pipeline failed: {}", e))
 }
 
 #[tauri::command]
 fn get_default_output_dir() -> String {
+    let s = settings::load();
+    if !s.working_folder.is_empty() {
+        let subfolder = if s.meetings_subfolder.is_empty() {
+            "Meetings".to_string()
+        } else {
+            s.meetings_subfolder.clone()
+        };
+        return PathBuf::from(&s.working_folder)
+            .join(&subfolder)
+            .to_string_lossy()
+            .to_string();
+    }
     let home = dirs::document_dir().unwrap_or_else(|| PathBuf::from("."));
-    let output_dir = home.join("MeetingScribe");
-    output_dir.to_string_lossy().to_string()
+    home.join("Sidekick2000").to_string_lossy().to_string()
 }
 
 #[tauri::command]
@@ -87,42 +116,21 @@ async fn open_file(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn load_context_file(name: String) -> Result<String, String> {
-    // Look for context files relative to the executable or in a known location
-    let paths = vec![
-        // Development: relative to project root
-        PathBuf::from(format!("../contexts/{}", name)),
-        // Bundled: next to executable
-        std::env::current_exe()
-            .unwrap_or_default()
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("contexts")
-            .join(&name),
-        // Fallback: absolute path
-        PathBuf::from(&name),
-    ];
-
-    for path in &paths {
-        if path.exists() {
-            return std::fs::read_to_string(path)
-                .map_err(|e| format!("Failed to read context file: {}", e));
-        }
-    }
-
-    // Return empty string if not found
-    log::warn!("Context file not found: {}", name);
-    Ok(String::new())
+fn get_settings() -> Result<settings::Settings, String> {
+    Ok(settings::load())
 }
 
-use std::path::Path;
+#[tauri::command]
+fn save_settings(s: settings::Settings) -> Result<(), String> {
+    settings::save(&s).map_err(|e| format!("Failed to save settings: {}", e))
+}
 
 pub fn run() {
-    // Load .env file
+    // Load .env file as fallback
     let _ = dotenvy::dotenv();
     env_logger::init();
 
-    let temp_dir = std::env::temp_dir().join("meeting-scribe");
+    let temp_dir = std::env::temp_dir().join("sidekick2000");
     let _ = std::fs::create_dir_all(&temp_dir);
 
     tauri::Builder::default()
@@ -142,7 +150,8 @@ pub fn run() {
             run_pipeline,
             get_default_output_dir,
             open_file,
-            load_context_file,
+            get_settings,
+            save_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

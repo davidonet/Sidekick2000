@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { appState, CONTEXT_FILES, LANGUAGES } from "../lib/state.svelte";
+  import { appState, LANGUAGES } from "../lib/state.svelte";
   import SpeakerChip from "./SpeakerChip.svelte";
 
   let newName = $state("");
@@ -37,19 +37,25 @@
     <label for="context-select" class="block text-sm font-medium mb-1" style="color: var(--text-muted)">
       Context
     </label>
-    <select
-      id="context-select"
-      class="w-full rounded-md px-3 py-2 text-sm border"
-      style="background: var(--bg); border-color: var(--border); color: var(--text)"
-      bind:value={appState.contextFile}
-      disabled={appState.phase !== "setup"}
-    >
-      {#each CONTEXT_FILES as ctx (ctx.filename)}
-        <option value={ctx.filename}>{ctx.label}</option>
-      {/each}
-      <option value="custom">Custom...</option>
-    </select>
-    {#if appState.contextFile === "custom"}
+    {#if appState.contexts.length > 0}
+      <select
+        id="context-select"
+        class="w-full rounded-md px-3 py-2 text-sm border"
+        style="background: var(--bg); border-color: var(--border); color: var(--text)"
+        bind:value={appState.selectedContextId}
+        disabled={appState.phase !== "setup"}
+      >
+        {#each appState.contexts as ctx (ctx.id)}
+          <option value={ctx.id}>{ctx.label}</option>
+        {/each}
+        <option value="custom">Custom...</option>
+      </select>
+    {:else}
+      <p class="text-xs rounded-md px-3 py-2 border" style="border-color: var(--border); color: var(--text-muted)">
+        No contexts configured. Open Settings to add contexts.
+      </p>
+    {/if}
+    {#if appState.selectedContextId === "custom"}
       <textarea
         class="w-full mt-2 rounded-md px-3 py-2 text-sm border"
         style="background: var(--bg); border-color: var(--border); color: var(--text)"
@@ -127,35 +133,18 @@
     {/if}
   </div>
 
-  <!-- GitHub Repo (optional) -->
-  <div class="mb-4">
-    <label for="github-repo" class="block text-sm font-medium mb-1" style="color: var(--text-muted)">
-      GitHub Repo
-      <span class="text-xs opacity-60">(optional — post action items as issues)</span>
-    </label>
-    <input
-      id="github-repo"
-      type="text"
-      class="w-full rounded-md px-3 py-2 text-sm border"
-      style="background: var(--bg); border-color: var(--border); color: var(--text)"
-      placeholder="owner/repo"
-      bind:value={appState.githubRepo}
-      disabled={appState.phase !== "setup"}
-    />
-  </div>
-
-  <!-- Output dir -->
+  <!-- Output dir (read-only display, configurable via Settings) -->
   <div>
-    <label for="output-dir" class="block text-sm font-medium mb-1" style="color: var(--text-muted)">
+    <label class="block text-sm font-medium mb-1" style="color: var(--text-muted)">
       Output Directory
+      <span class="text-xs opacity-60">(configure in Settings)</span>
     </label>
-    <input
-      id="output-dir"
-      type="text"
-      class="w-full rounded-md px-3 py-2 text-sm border"
-      style="background: var(--bg); border-color: var(--border); color: var(--text)"
-      bind:value={appState.outputDir}
-      disabled={appState.phase !== "setup"}
-    />
+    <p
+      class="w-full rounded-md px-3 py-2 text-sm border truncate"
+      style="background: var(--bg); border-color: var(--border); color: var(--text-muted)"
+      title={appState.outputDir}
+    >
+      {appState.outputDir || "Not configured"}
+    </p>
   </div>
 </section>

@@ -9,11 +9,12 @@
     { key: "exporting", label: "Exporting" },
   ];
 
-  let steps = $derived(
-    appState.githubRepo
-      ? [...baseSteps, { key: "creating_issues", label: "Creating GitHub Issues" }]
-      : baseSteps,
-  );
+  let steps = $derived(() => {
+    const s = [...baseSteps];
+    if (appState.workingFolder) s.push({ key: "committing", label: "Committing to Git" });
+    if (appState.githubRepo) s.push({ key: "creating_issues", label: "Creating GitHub Issues" });
+    return s;
+  })();
 
   function stepStatus(stepKey: string): "done" | "active" | "pending" {
     if (appState.pipelineStep === "done") return "done";

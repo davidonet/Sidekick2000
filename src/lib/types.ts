@@ -4,6 +4,23 @@ export interface Speaker {
   enabled: boolean;
 }
 
+export interface Context {
+  id: string;
+  label: string;
+  content: string;
+}
+
+export interface Settings {
+  groq_api_key: string;
+  anthropic_api_key: string;
+  working_folder: string;
+  github_repo: string;
+  meetings_subfolder: string;
+  default_language: string;
+  default_speakers: { name: string; organization: string }[];
+  contexts: Context[];
+}
+
 export interface PipelineConfig {
   context: string;
   context_content: string;
@@ -12,6 +29,7 @@ export interface PipelineConfig {
   language_name: string;
   github_repo: string;
   output_dir: string;
+  working_folder: string;
   ogg_path: string;
   wav_path: string;
 }
@@ -35,9 +53,6 @@ export type PipelineStep =
   | "merging"
   | "summarizing"
   | "exporting"
+  | "committing"
+  | "creating_issues"
   | "done";
-
-export interface ContextFile {
-  label: string;
-  filename: string;
-}

@@ -27,6 +27,8 @@ pub struct PipelineConfig {
     /// Optional GitHub repo (e.g. "owner/repo") to create issues for action items
     pub github_repo: String,
     pub output_dir: String,
+    /// Git repo root folder for committing notes (empty = no commit)
+    pub working_folder: String,
     pub ogg_path: String,
     pub wav_path: String,
 }
@@ -53,13 +55,35 @@ fn emit_progress(app: &AppHandle, step: &str, progress: f64) {
     );
 }
 
-/// Run the full processing pipeline
-pub async fn run(config: PipelineConfig, app: AppHandle) -> Result<PipelineResult> {
-    let groq_key = std::env::var("GROQ_API_KEY")
-        .map_err(|_| anyhow::anyhow!("GROQ_API_KEY not set. Add it to your .env file."))?;
-    let anthropic_key = std::env::var("ANTHROPIC_API_KEY")
-        .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY not set. Add it to your .env file."))?;
+/// Commit files to the working_folder git repo
+fn git_commit_notes(working_folder: &str, notes_rel: &str, transcript_rel: &str, message: &str) {
+    let add = std::process::Command::new("git")
+        .current_dir(working_folder)
+        .args(["add", notes_rel, transcript_rel])
+        .output();
 
+    if let Ok(o) = add {
+        if o.status.success() {
+            let _ = std::process::Command::new("git")
+                .current_dir(working_folder)
+                .args(["commit", "-m", message])
+                .output();
+        } else {
+            log::warn!(
+                "git add failed: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        }
+    }
+}
+
+/// Run the full processing pipeline
+pub async fn run(
+    config: PipelineConfig,
+    groq_key: String,
+    anthropic_key: String,
+    app: AppHandle,
+) -> Result<PipelineResult> {
     let ogg_path = PathBuf::from(&config.ogg_path);
     let wav_path = PathBuf::from(&config.wav_path);
 
@@ -127,29 +151,54 @@ pub async fn run(config: PipelineConfig, app: AppHandle) -> Result<PipelineResul
     let output_dir = PathBuf::from(&config.output_dir);
     std::fs::create_dir_all(&output_dir)?;
 
-    // File naming: YYYY-MM-DD_Context.md
-    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    // File naming: YYYY-MM-DD_HHmm_Context.md
+    let now = chrono::Local::now();
+    let date = now.format("%Y-%m-%d").to_string();
+    let time = now.format("%H%M").to_string();
     let context_sanitized = export::sanitize_filename(&config.context);
-    let filename = if context_sanitized.is_empty() {
-        format!("{}_meeting.md", date)
+    let base_name = if context_sanitized.is_empty() {
+        format!("{}_{}_{}", date, time, "meeting")
     } else {
-        format!("{}_{}.md", date, context_sanitized)
+        format!("{}_{}_{}",  date, time, context_sanitized)
     };
 
-    let output_path = output_dir.join(&filename);
+    let filename = format!("{}.md", base_name);
+    let transcript_filename = format!("{}_transcript.md", base_name);
 
-    // Write the summary as the main output file
+    let output_path = output_dir.join(&filename);
+    let transcript_path = output_dir.join(&transcript_filename);
+
     std::fs::write(&output_path, &notes)?;
     log::info!("Meeting notes saved to: {}", output_path.display());
 
-    // Also save the transcript
-    let transcript_path = output_dir.join(format!(
-        "{}_{}_transcript.md",
-        date, context_sanitized
-    ));
     std::fs::write(&transcript_path, &transcript_md)?;
 
-    // Step 7: Create GitHub issues from action items (optional)
+    // Step 7: Git commit (if working_folder is set and is a git repo)
+    if !config.working_folder.is_empty() {
+        emit_progress(&app, "committing", 0.93);
+        let working_folder = &config.working_folder;
+
+        // Compute paths relative to the git root
+        let notes_rel = output_path
+            .strip_prefix(working_folder)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| output_path.to_string_lossy().to_string());
+        let transcript_rel = transcript_path
+            .strip_prefix(working_folder)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| transcript_path.to_string_lossy().to_string());
+
+        let commit_msg = format!(
+            "meeting: {} {}",
+            if context_sanitized.is_empty() { "general" } else { &context_sanitized },
+            date
+        );
+
+        git_commit_notes(working_folder, &notes_rel, &transcript_rel, &commit_msg);
+        log::info!("Git commit done: {}", commit_msg);
+    }
+
+    // Step 8: Create GitHub issues from action items (optional)
     let mut created_issues = Vec::new();
     if !config.github_repo.is_empty() {
         emit_progress(&app, "creating_issues", 0.95);

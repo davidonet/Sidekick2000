@@ -6,7 +6,6 @@
     getAudioLevel,
     getElapsed,
     runPipeline,
-    loadContextFile,
     onPipelineProgress,
   } from "../lib/api";
   import type { PipelineConfig } from "../lib/types";
@@ -60,22 +59,12 @@
   }
 
   async function startPipeline() {
-    // Set up progress listener
     const unlisten = await onPipelineProgress((step, progress) => {
       appState.pipelineStep = step;
       appState.pipelineProgress = progress;
     });
 
     try {
-      // Load context content
-      let contextContent = "";
-      if (appState.contextFile === "custom") {
-        contextContent = appState.customContext;
-      } else {
-        contextContent = await loadContextFile(appState.contextFile);
-      }
-
-      // Map language code to language name for the prompt
       const langMap: Record<string, string> = {
         fr: "French",
         en: "English",
@@ -86,8 +75,8 @@
       };
 
       const config: PipelineConfig = {
-        context: appState.contextFile === "custom" ? "custom" : appState.contextFile.replace(".md", ""),
-        context_content: contextContent,
+        context: appState.contextLabel,
+        context_content: appState.contextContent,
         speakers: appState.enabledSpeakers.map((s) => ({
           name: s.name,
           organization: s.organization,
@@ -96,6 +85,7 @@
         language_name: langMap[appState.language] || "",
         github_repo: appState.githubRepo,
         output_dir: appState.outputDir,
+        working_folder: appState.workingFolder,
         ogg_path: appState.oggPath,
         wav_path: appState.wavPath,
       };
