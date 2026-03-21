@@ -33,6 +33,8 @@ class AppState {
   // Recording
   audioLevel: number = $state(0);
   elapsedSecs: number = $state(0);
+  selectedDevice: string = $state("");
+  inputDevices: string[] = $state([]);
 
   // Processing
   pipelineStep: PipelineStep = $state("transcribing");
@@ -93,6 +95,7 @@ class AppState {
     this.githubRepo = s.github_repo;
     this.workingFolder = s.working_folder;
     this.language = s.default_language || "fr";
+    this.selectedDevice = s.default_input_device || "";
     this.speakers = s.default_speakers.map((sp) => ({ ...sp, enabled: true }));
     // Select first context by default
     if (s.contexts.length > 0 && this.selectedContextId === "default") {
@@ -104,6 +107,7 @@ class AppState {
     this.phase = "setup";
     this.audioLevel = 0;
     this.elapsedSecs = 0;
+    this.selectedDevice = "";
     this.pipelineStep = "transcribing";
     this.pipelineProgress = 0;
     this.resultPath = "";

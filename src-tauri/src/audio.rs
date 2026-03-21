@@ -7,6 +7,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+/// Returns the names of all available input devices.
+pub fn list_input_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    host.input_devices()
+        .map(|devices| {
+            devices
+                .filter_map(|d| d.name().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Manages audio recording from the default input device.
 ///
 /// Because `cpal::Stream` is not `Send` on macOS, we store the stream
@@ -31,10 +43,10 @@ impl AudioRecorder {
         }
     }
 
-    /// Start recording from the default input device.
+    /// Start recording from the specified input device, or the default if `device_name` is None.
     /// The stream is kept alive by a dedicated non-Send thread
     /// spawned via `dispatch` on macOS.
-    pub fn start(&self) -> Result<()> {
+    pub fn start(&self, device_name: Option<String>) -> Result<()> {
         if self.is_recording.load(Ordering::SeqCst) {
             anyhow::bail!("Already recording");
         }
@@ -43,9 +55,15 @@ impl AudioRecorder {
         self.samples.lock().unwrap().clear();
 
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .context("No input device available")?;
+        let device = if let Some(name) = device_name {
+            host.input_devices()
+                .context("Failed to enumerate input devices")?
+                .find(|d| d.name().map(|n| n == name).unwrap_or(false))
+                .with_context(|| format!("Input device not found: {}", name))?
+        } else {
+            host.default_input_device()
+                .context("No input device available")?
+        };
 
         log::info!("Recording from: {}", device.name().unwrap_or_default());
 
@@ -160,9 +178,9 @@ impl AudioRecorder {
         save_wav(&resampled, target_sr, &wav_path)?;
         log::info!("Saved WAV: {}", wav_path.display());
 
-        // Convert WAV → OGG/Opus via ffmpeg for Groq upload (much smaller)
+        // Encode OGG/Opus for Groq upload (much smaller than WAV)
         let ogg_path = output_dir.join("recording.ogg");
-        convert_wav_to_ogg(&wav_path, &ogg_path)?;
+        convert_to_ogg(&resampled, target_sr, &ogg_path)?;
 
         let ogg_size_mb = std::fs::metadata(&ogg_path)
             .map(|m| m.len() as f64 / (1024.0 * 1024.0))
@@ -247,29 +265,88 @@ fn resample(samples: &[f32], from_sr: u32, to_sr: u32) -> Vec<f32> {
     result
 }
 
-/// Convert WAV to OGG/Opus using ffmpeg for compact upload to Groq.
-/// Opus at 32kbps mono gives ~15x compression over 16-bit PCM WAV.
-fn convert_wav_to_ogg(wav_path: &PathBuf, ogg_path: &PathBuf) -> Result<()> {
-    log::info!("Converting WAV → OGG/Opus via ffmpeg");
+/// Encode PCM samples as OGG/Opus using pure Rust (no ffmpeg required).
+/// Opus at 32 kbps mono gives ~15× compression over 16-bit PCM WAV.
+fn convert_to_ogg(samples: &[f32], sample_rate: u32, ogg_path: &PathBuf) -> Result<()> {
+    use ogg::writing::{PacketWriteEndInfo, PacketWriter};
+    use opus::{Application, Channels, Encoder};
+    use std::rc::Rc;
 
-    let output = std::process::Command::new("ffmpeg")
-        .args([
-            "-y",               // overwrite output
-            "-i",
-            wav_path.to_str().unwrap_or_default(),
-            "-c:a", "libopus",  // Opus codec
-            "-b:a", "32k",      // 32 kbps — excellent quality for speech
-            "-ac", "1",         // mono
-            "-ar", "16000",     // 16 kHz
-            "-application", "voip", // optimized for speech
-            ogg_path.to_str().unwrap_or_default(),
-        ])
-        .output()
-        .context("Failed to run ffmpeg. Is ffmpeg installed? (brew install ffmpeg)")?;
+    log::info!("Encoding OGG/Opus (pure Rust, no ffmpeg)");
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("ffmpeg encoding failed: {}", stderr);
+    let mut encoder = Encoder::new(sample_rate, Channels::Mono, Application::Voip)
+        .context("Failed to create Opus encoder")?;
+    encoder
+        .set_bitrate(opus::Bitrate::Bits(32_000))
+        .context("Failed to set Opus bitrate")?;
+
+    // Pre-skip: standard SILK lookahead expressed in 48 kHz samples.
+    let pre_skip: u16 = 312;
+
+    let file = std::fs::File::create(ogg_path)
+        .with_context(|| format!("Failed to create {}", ogg_path.display()))?;
+    let mut pw = PacketWriter::new(std::io::BufWriter::new(file));
+    let serial: u32 = 0x4f707573; // "Opus" as u32
+
+    // OpusHead identification header (RFC 7845 §5.1)
+    let mut head: Vec<u8> = Vec::with_capacity(19);
+    head.extend_from_slice(b"OpusHead");
+    head.push(1);                                         // version
+    head.push(1);                                         // channels
+    head.extend_from_slice(&pre_skip.to_le_bytes());      // pre-skip (48 kHz samples)
+    head.extend_from_slice(&sample_rate.to_le_bytes());   // original input sample rate
+    head.extend_from_slice(&0u16.to_le_bytes());          // output gain
+    head.push(0);                                         // channel mapping family: mono
+    pw.write_packet(Rc::from(head.as_slice()), serial, PacketWriteEndInfo::EndPage, 0)
+        .context("Failed to write OpusHead")?;
+
+    // OpusTags comment header (RFC 7845 §5.2)
+    let vendor = b"sidekick2000";
+    let mut tags: Vec<u8> = Vec::new();
+    tags.extend_from_slice(b"OpusTags");
+    tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+    tags.extend_from_slice(vendor);
+    tags.extend_from_slice(&0u32.to_le_bytes()); // 0 user comments
+    pw.write_packet(Rc::from(tags.as_slice()), serial, PacketWriteEndInfo::EndPage, 0)
+        .context("Failed to write OpusTags")?;
+
+    // Audio packets: 20 ms frames.
+    // Granule positions are always in 48 kHz samples regardless of input rate.
+    let frame_size = (sample_rate / 50) as usize; // e.g. 320 samples at 16 kHz
+    let granule_step = 48_000u64 / 50;            // 960 per 20 ms frame at 48 kHz
+    let mut granule = pre_skip as u64;
+    let mut out_buf = vec![0u8; 4_000];
+
+    let chunks: Vec<&[f32]> = samples.chunks(frame_size).collect();
+    let total = chunks.len();
+
+    for (i, chunk) in chunks.into_iter().enumerate() {
+        granule += granule_step;
+
+        // f32 → i16, zero-padding the last frame if it's short
+        let mut padded = chunk.to_vec();
+        padded.resize(frame_size, 0.0);
+        let pcm: Vec<i16> = padded
+            .iter()
+            .map(|&s| (s * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+            .collect();
+
+        let n = encoder
+            .encode(&pcm, &mut out_buf)
+            .context("Opus encoding failed")?;
+
+        let is_last = i + 1 == total;
+        let end_info = if is_last {
+            PacketWriteEndInfo::EndStream
+        } else if (i + 1) % 50 == 0 {
+            // End a page roughly every second to keep page sizes reasonable
+            PacketWriteEndInfo::EndPage
+        } else {
+            PacketWriteEndInfo::NormalPacket
+        };
+
+        pw.write_packet(Rc::from(&out_buf[..n]), serial, end_info, granule)
+            .context("Failed to write Opus packet")?;
     }
 
     log::info!("OGG/Opus encoding complete: {}", ogg_path.display());

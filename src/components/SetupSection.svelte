@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appState, LANGUAGES } from "../lib/state.svelte";
   import SpeakerChip from "./SpeakerChip.svelte";
+  import Select from "./Select.svelte";
 
   let newName = $state("");
   let newOrg = $state("");
@@ -38,18 +39,12 @@
       Context
     </label>
     {#if appState.contexts.length > 0}
-      <select
-        id="context-select"
-        class="w-full rounded-md px-3 py-2 text-sm border"
-        style="background: var(--bg); border-color: var(--border); color: var(--text)"
-        bind:value={appState.selectedContextId}
-        disabled={appState.phase !== "setup"}
-      >
+      <Select bind:value={appState.selectedContextId} disabled={appState.phase !== "setup"}>
         {#each appState.contexts as ctx (ctx.id)}
           <option value={ctx.id}>{ctx.label}</option>
         {/each}
         <option value="custom">Custom...</option>
-      </select>
+      </Select>
     {:else}
       <p class="text-xs rounded-md px-3 py-2 border" style="border-color: var(--border); color: var(--text-muted)">
         No contexts configured. Open Settings to add contexts.
@@ -72,17 +67,11 @@
     <label for="language-select" class="block text-sm font-medium mb-1" style="color: var(--text-muted)">
       Language
     </label>
-    <select
-      id="language-select"
-      class="w-full rounded-md px-3 py-2 text-sm border"
-      style="background: var(--bg); border-color: var(--border); color: var(--text)"
-      bind:value={appState.language}
-      disabled={appState.phase !== "setup"}
-    >
+    <Select bind:value={appState.language} disabled={appState.phase !== "setup"}>
       {#each LANGUAGES as lang (lang.code)}
         <option value={lang.code}>{lang.label}</option>
       {/each}
-    </select>
+    </Select>
   </div>
 
   <!-- Speakers -->

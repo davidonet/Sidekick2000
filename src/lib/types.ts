@@ -19,6 +19,7 @@ export interface Settings {
   default_language: string;
   default_speakers: { name: string; organization: string }[];
   contexts: Context[];
+  default_input_device: string;
 }
 
 export interface PipelineConfig {

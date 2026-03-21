@@ -8,7 +8,7 @@ mod settings;
 mod summarize;
 mod transcribe;
 
-use audio::AudioRecorder;
+use audio::{list_input_devices, AudioRecorder};
 use pipeline::PipelineConfig;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -20,14 +20,20 @@ struct AppState {
 }
 
 #[tauri::command]
+fn list_input_devices_cmd() -> Vec<String> {
+    list_input_devices()
+}
+
+#[tauri::command]
 async fn start_recording(
     state: tauri::State<'_, Mutex<AppState>>,
     _app: tauri::AppHandle,
+    device_name: Option<String>,
 ) -> Result<(), String> {
     let state = state.lock().map_err(|e| e.to_string())?;
     state
         .recorder
-        .start()
+        .start(device_name)
         .map_err(|e| format!("Failed to start recording: {}", e))
 }
 
@@ -125,6 +131,13 @@ fn save_settings(s: settings::Settings) -> Result<(), String> {
     settings::save(&s).map_err(|e| format!("Failed to save settings: {}", e))
 }
 
+#[tauri::command]
+fn save_input_device(name: String) -> Result<(), String> {
+    let mut s = settings::load();
+    s.default_input_device = name;
+    settings::save(&s).map_err(|e| format!("Failed to save input device: {}", e))
+}
+
 pub fn run() {
     // Load .env file as fallback
     let _ = dotenvy::dotenv();
@@ -142,6 +155,7 @@ pub fn run() {
             temp_dir,
         }))
         .invoke_handler(tauri::generate_handler![
+            list_input_devices_cmd,
             start_recording,
             stop_recording,
             get_audio_level,
@@ -152,6 +166,7 @@ pub fn run() {
             open_file,
             get_settings,
             save_settings,
+            save_input_device,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

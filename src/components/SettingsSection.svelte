@@ -3,6 +3,7 @@
   import { LANGUAGES } from "../lib/state.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import type { Context } from "../lib/types";
+  import Select from "./Select.svelte";
 
   let activeTab: "keys" | "repo" | "contexts" | "speakers" = $state("keys");
 
@@ -183,15 +184,11 @@
         </div>
         <div>
           <label class="block text-sm font-medium mb-1" style="color: var(--text-muted)">Default Language</label>
-          <select
-            class="w-full rounded-md px-3 py-2 text-sm border"
-            style="background: var(--bg); border-color: var(--border); color: var(--text)"
-            bind:value={settingsState.default_language}
-          >
+          <Select bind:value={settingsState.default_language}>
             {#each LANGUAGES as lang (lang.code)}
               <option value={lang.code}>{lang.label}</option>
             {/each}
-          </select>
+          </Select>
         </div>
       </div>
     {/if}

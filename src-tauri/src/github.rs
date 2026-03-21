@@ -25,27 +25,13 @@ pub struct CreatedIssue {
 ///   - [ ] @assignee Task description
 pub fn parse_action_items(notes: &str) -> Vec<ActionItem> {
     let mut items = Vec::new();
-    let mut in_action_section = false;
 
     for line in notes.lines() {
         let trimmed = line.trim();
 
-        // Detect the Action Items section header
-        if trimmed.contains("Action Items") || trimmed.contains("action items") {
-            in_action_section = true;
-            continue;
-        }
-
-        // Stop at the next section header
-        if in_action_section && trimmed.starts_with('#') {
-            break;
-        }
-
-        if !in_action_section {
-            continue;
-        }
-
-        // Match checkbox lines: - [ ] ... or - [x] ...
+        // Match checkbox lines anywhere in the document: - [ ], - [x], * [ ]
+        // Checkboxes only appear in the Action Items section of the template,
+        // so no section-gating is needed — and avoids language-specific header matching.
         let checkbox_content = if trimmed.starts_with("- [ ] ") {
             Some(&trimmed[6..])
         } else if trimmed.starts_with("- [x] ") {
@@ -67,10 +53,7 @@ pub fn parse_action_items(notes: &str) -> Vec<ActionItem> {
             items.push(ActionItem {
                 title: title.clone(),
                 assignee,
-                body: format!(
-                    "Action item from meeting notes.\n\n> {}",
-                    content
-                ),
+                body: format!("Action item from meeting notes.\n\n> {}", content),
             });
         }
     }

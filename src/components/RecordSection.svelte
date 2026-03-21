@@ -1,6 +1,9 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { appState } from "../lib/state.svelte";
   import {
+    listInputDevices,
+    saveInputDevice,
     startRecording,
     stopRecording,
     getAudioLevel,
@@ -10,30 +13,43 @@
   } from "../lib/api";
   import type { PipelineConfig } from "../lib/types";
   import AudioMeter from "./AudioMeter.svelte";
+  import Select from "./Select.svelte";
 
   let pollingId: ReturnType<typeof setInterval> | null = null;
+  let stopping = $state(false);
+
+  onMount(async () => {
+    try {
+      appState.inputDevices = await listInputDevices();
+    } catch {
+      // ignore — device list just stays empty
+    }
+  });
 
   async function handleRecord() {
     if (appState.phase === "recording") {
       // Stop recording
+      stopping = true;
+      if (pollingId) {
+        clearInterval(pollingId);
+        pollingId = null;
+      }
       try {
         const [oggPath, wavPath] = await stopRecording();
         appState.oggPath = oggPath;
         appState.wavPath = wavPath;
-        if (pollingId) {
-          clearInterval(pollingId);
-          pollingId = null;
-        }
+        stopping = false;
         appState.phase = "processing";
         await startPipeline();
       } catch (e: any) {
+        stopping = false;
         appState.errorMessage = e.toString();
         appState.phase = "error";
       }
     } else {
       // Start recording
       try {
-        await startRecording();
+        await startRecording(appState.selectedDevice || undefined);
         appState.phase = "recording";
         appState.elapsedSecs = 0;
         appState.audioLevel = 0;
@@ -117,14 +133,39 @@
   </div>
 
   <div class="flex flex-col items-center gap-4">
+    <!-- Device selector -->
+    {#if appState.phase === "setup" && appState.inputDevices.length > 0}
+      <div class="w-full">
+        <label class="block text-xs mb-1" style="color: var(--text-muted)">
+          Input device
+        </label>
+        <Select
+          bind:value={appState.selectedDevice}
+          onchange={() => saveInputDevice(appState.selectedDevice).catch(() => {})}
+        >
+          <option value="">Default</option>
+          {#each appState.inputDevices as device}
+            <option value={device}>{device}</option>
+          {/each}
+        </Select>
+      </div>
+    {/if}
+
     <!-- Record button -->
     <button
-      class="w-20 h-20 rounded-full flex items-center justify-center transition-all cursor-pointer border-0"
-      style="background: {appState.phase === 'recording' ? 'var(--danger)' : 'var(--accent)'}; box-shadow: 0 0 {appState.phase === 'recording' ? '20px' : '0px'} {appState.phase === 'recording' ? 'var(--danger)' : 'transparent'}"
+      class="w-20 h-20 rounded-full flex items-center justify-center transition-all border-0"
+      class:cursor-pointer={!stopping}
+      class:cursor-default={stopping}
+      style="background: {appState.phase === 'recording' || stopping ? 'var(--danger)' : 'var(--accent)'}; opacity: {stopping ? 0.6 : 1}; box-shadow: 0 0 {appState.phase === 'recording' && !stopping ? '20px' : '0px'} {appState.phase === 'recording' ? 'var(--danger)' : 'transparent'}"
       onclick={handleRecord}
-      disabled={appState.phase !== "setup" && appState.phase !== "recording"}
+      disabled={stopping || (appState.phase !== "setup" && appState.phase !== "recording")}
     >
-      {#if appState.phase === "recording"}
+      {#if stopping}
+        <!-- Spinner -->
+        <svg class="animate-spin" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5">
+          <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round" />
+        </svg>
+      {:else if appState.phase === "recording"}
         <!-- Stop icon -->
         <svg width="28" height="28" viewBox="0 0 24 24" fill="white">
           <rect x="6" y="6" width="12" height="12" rx="2" />
@@ -139,11 +180,11 @@
       {/if}
     </button>
 
-    {#if appState.phase === "recording"}
+    {#if stopping}
+      <p class="text-sm" style="color: var(--text-muted)">Saving audio…</p>
+    {:else if appState.phase === "recording"}
       <AudioMeter level={appState.audioLevel} />
-    {/if}
-
-    {#if appState.phase === "setup"}
+    {:else if appState.phase === "setup"}
       <p class="text-sm" style="color: var(--text-muted)">
         Click to start recording
       </p>

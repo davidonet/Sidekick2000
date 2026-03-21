@@ -33,6 +33,8 @@ pub struct Settings {
     pub default_speakers: Vec<Speaker>,
     #[serde(default)]
     pub contexts: Vec<Context>,
+    #[serde(default)]
+    pub default_input_device: String,
 }
 
 impl Default for Settings {
@@ -46,6 +48,7 @@ impl Default for Settings {
             default_language: default_language(),
             default_speakers: Vec::new(),
             contexts: Vec::new(),
+            default_input_device: String::new(),
         }
     }
 }

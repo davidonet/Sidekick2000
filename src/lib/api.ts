@@ -2,8 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { PipelineConfig, PipelineResult, PipelineStep, Settings } from "./types";
 
-export async function startRecording(): Promise<void> {
-  await invoke("start_recording");
+export async function listInputDevices(): Promise<string[]> {
+  return await invoke("list_input_devices_cmd");
+}
+
+export async function startRecording(deviceName?: string): Promise<void> {
+  await invoke("start_recording", { deviceName: deviceName ?? null });
 }
 
 export async function stopRecording(): Promise<[string, string]> {
@@ -40,6 +44,10 @@ export async function getSettings(): Promise<Settings> {
 
 export async function saveSettings(s: Settings): Promise<void> {
   await invoke("save_settings", { s });
+}
+
+export async function saveInputDevice(name: string): Promise<void> {
+  await invoke("save_input_device", { name });
 }
 
 export function onPipelineProgress(
