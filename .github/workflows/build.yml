@@ -32,6 +32,12 @@ jobs:
         if: contains(matrix.platform, 'macos')
         run: brew install opus
 
+      - name: Set up cmake toolchain for macOS x86_64 cross-compilation
+        if: matrix.artifact == 'macos-x86_64'
+        run: |
+          printf 'set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)\n' > /tmp/cmake-toolchain.cmake
+          echo "CMAKE_TOOLCHAIN_FILE=/tmp/cmake-toolchain.cmake" >> $GITHUB_ENV
+
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -71,12 +77,6 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           args: ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
 
