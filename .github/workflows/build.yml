@@ -13,9 +13,6 @@ jobs:
           - platform: macos-latest
             target: aarch64-apple-darwin
             artifact: macos-arm64
-          - platform: macos-latest
-            target: x86_64-apple-darwin
-            artifact: macos-x86_64
           - platform: ubuntu-22.04
             target: ""
             artifact: linux
@@ -31,12 +28,6 @@ jobs:
       - name: Install macOS dependencies
         if: contains(matrix.platform, 'macos')
         run: brew install opus
-
-      - name: Set up cmake toolchain for macOS x86_64 cross-compilation
-        if: matrix.artifact == 'macos-x86_64'
-        run: |
-          printf 'set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)\n' > /tmp/cmake-toolchain.cmake
-          echo "CMAKE_TOOLCHAIN_FILE=/tmp/cmake-toolchain.cmake" >> $GITHUB_ENV
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -86,13 +77,6 @@ jobs:
         with:
           name: macos-arm64
           path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-
-      - name: Upload macOS x86_64 bundle
-        if: matrix.artifact == 'macos-x86_64'
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-x86_64
-          path: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
 
       - name: Upload Linux bundle
         if: matrix.artifact == 'linux'
