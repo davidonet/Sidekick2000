@@ -20,12 +20,20 @@ export interface Settings {
   default_speakers: { name: string; organization: string }[];
   contexts: Context[];
   default_input_device: string;
+  local_speaker_name: string;
+  remote_device: string;
+  remote_speaker_name: string;
   together_ai_api_key: string;
   summarization_provider: string;
   together_ai_model: string;
   enable_summary: boolean;
   enable_git_commit: boolean;
   enable_github_issues: boolean;
+}
+
+export interface ImageAnnotation {
+  path: string;
+  timecode_secs: number;
 }
 
 export interface PipelineConfig {
@@ -38,8 +46,11 @@ export interface PipelineConfig {
   github_repo: string;
   output_dir: string;
   working_folder: string;
-  ogg_path: string;
-  wav_path: string;
+  local_ogg_path: string;
+  local_speaker_name: string;
+  remote_ogg_path: string;
+  remote_speaker_name: string;
+  image_annotations: ImageAnnotation[];
 }
 
 export interface CreatedIssue {

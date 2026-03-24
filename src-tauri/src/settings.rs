@@ -33,8 +33,18 @@ pub struct Settings {
     pub default_speakers: Vec<Speaker>,
     #[serde(default)]
     pub contexts: Vec<Context>,
+    /// Device name for the local microphone (the user's own mic).
     #[serde(default)]
     pub default_input_device: String,
+    /// Display name for the local speaker (shown in transcript and summary).
+    #[serde(default = "default_local_speaker_name")]
+    pub local_speaker_name: String,
+    /// Device name for the remote audio source (system audio / virtual cable).
+    #[serde(default)]
+    pub remote_device: String,
+    /// Display name for the remote speaker (shown in transcript and summary).
+    #[serde(default = "default_remote_speaker_name")]
+    pub remote_speaker_name: String,
     #[serde(default)]
     pub together_ai_api_key: String,
     /// "claude" or "together_ai"
@@ -62,6 +72,9 @@ impl Default for Settings {
             default_speakers: Vec::new(),
             contexts: Vec::new(),
             default_input_device: String::new(),
+            local_speaker_name: default_local_speaker_name(),
+            remote_device: String::new(),
+            remote_speaker_name: default_remote_speaker_name(),
             together_ai_api_key: String::new(),
             summarization_provider: default_summarization_provider(),
             together_ai_model: default_together_ai_model(),
@@ -74,6 +87,14 @@ impl Default for Settings {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_local_speaker_name() -> String {
+    "Local".to_string()
+}
+
+fn default_remote_speaker_name() -> String {
+    "Remote".to_string()
 }
 
 fn default_meetings_subfolder() -> String {

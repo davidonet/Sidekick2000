@@ -1,8 +1,9 @@
-use crate::diarize::DiarizationSegment;
 use crate::transcribe::TranscriptSegment;
 use serde::{Deserialize, Serialize};
 
+#[allow(dead_code)]
 const MAX_GAP: f64 = 0.5;
+#[allow(dead_code)]
 const MIN_OVERLAP: f64 = 0.1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,14 +14,52 @@ pub struct MergedSegment {
     pub text: String,
 }
 
+/// Merge two speaker-labeled transcript streams into a single time-sorted list.
+/// Since each stream comes from a distinct device with a known speaker, no
+/// diarization is needed — segments are labeled directly.
+pub fn merge_dual_transcripts(
+    local: &[TranscriptSegment],
+    local_speaker: &str,
+    remote: &[TranscriptSegment],
+    remote_speaker: &str,
+) -> Vec<MergedSegment> {
+    let mut result: Vec<MergedSegment> = local
+        .iter()
+        .map(|s| MergedSegment {
+            speaker: local_speaker.to_string(),
+            start: s.start,
+            end: s.end,
+            text: s.text.trim().to_string(),
+        })
+        .chain(remote.iter().map(|s| MergedSegment {
+            speaker: remote_speaker.to_string(),
+            start: s.start,
+            end: s.end,
+            text: s.text.trim().to_string(),
+        }))
+        .collect();
+
+    result.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+
+    log::info!(
+        "Merged dual transcripts: {} local + {} remote = {} segments",
+        local.len(),
+        remote.len(),
+        result.len()
+    );
+
+    result
+}
+
 /// Compute overlap duration between two time ranges
+#[allow(dead_code)]
 fn compute_overlap(s1_start: f64, s1_end: f64, s2_start: f64, s2_end: f64) -> f64 {
     let overlap_start = s1_start.max(s2_start);
     let overlap_end = s1_end.min(s2_end);
     (overlap_end - overlap_start).max(0.0)
 }
 
-/// Find best speaker for a transcript segment using overlap matching
+#[allow(dead_code)]
 fn find_best_speaker(
     ts: &TranscriptSegment,
     diarization: &[DiarizationSegment],
@@ -44,7 +83,7 @@ fn find_best_speaker(
     find_nearest_speaker(ts, diarization)
 }
 
-/// Find nearest speaker by midpoint distance
+#[allow(dead_code)]
 fn find_nearest_speaker(
     ts: &TranscriptSegment,
     diarization: &[DiarizationSegment],
@@ -69,7 +108,10 @@ fn find_nearest_speaker(
     }
 }
 
-/// Merge transcript segments with diarization segments
+use crate::diarize::DiarizationSegment;
+
+/// Merge transcript segments with diarization segments (legacy — used for single-stream dropped audio).
+#[allow(dead_code)]
 pub fn merge(
     transcript: &[TranscriptSegment],
     diarization: &[DiarizationSegment],
@@ -130,7 +172,7 @@ pub fn merge(
     all
 }
 
-/// Assign speakers to unassigned segments based on surrounding context
+#[allow(dead_code)]
 fn assign_remaining(assigned: &mut Vec<MergedSegment>, unassigned: &mut Vec<MergedSegment>) {
     if assigned.is_empty() {
         for seg in unassigned.iter_mut() {

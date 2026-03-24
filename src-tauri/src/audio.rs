@@ -202,8 +202,9 @@ impl AudioRecorder {
         Ok(())
     }
 
-    /// Stop recording and save the audio to WAV files
-    pub fn stop(&self, output_dir: &PathBuf) -> Result<(PathBuf, PathBuf)> {
+    /// Stop recording and save audio files using `prefix` as the base filename.
+    /// Produces `{prefix}.ogg` (for Groq) and `{prefix}.wav` (raw PCM).
+    pub fn stop(&self, output_dir: &PathBuf, prefix: &str) -> Result<(PathBuf, PathBuf)> {
         self.is_recording.store(false, Ordering::SeqCst);
 
         // Give the stream thread time to notice and drop
@@ -218,10 +219,8 @@ impl AudioRecorder {
         }
 
         log::info!(
-            "Recorded {} samples at {}Hz, {} channels",
-            samples.len(),
-            native_sr,
-            channels
+            "[{}] Recorded {} samples at {}Hz, {} channels",
+            prefix, samples.len(), native_sr, channels
         );
 
         // Convert to mono if multi-channel
@@ -234,32 +233,25 @@ impl AudioRecorder {
             samples
         };
 
-        // Resample to 16kHz for Whisper/diarization
+        // Resample to 16 kHz for Whisper
         let target_sr = 16000u32;
         let resampled = resample(&mono_samples, native_sr, target_sr);
 
         std::fs::create_dir_all(output_dir)?;
 
-        // Save WAV (for diarization — needs raw PCM)
-        let wav_path = output_dir.join("recording.wav");
+        let wav_path = output_dir.join(format!("{}.wav", prefix));
         save_wav(&resampled, target_sr, &wav_path)?;
         log::info!("Saved WAV: {}", wav_path.display());
 
-        // Encode OGG/Opus for Groq upload (much smaller than WAV)
-        let ogg_path = output_dir.join("recording.ogg");
+        let ogg_path = output_dir.join(format!("{}.ogg", prefix));
         convert_to_ogg(&resampled, target_sr, &ogg_path)?;
 
         let ogg_size_mb = std::fs::metadata(&ogg_path)
             .map(|m| m.len() as f64 / (1024.0 * 1024.0))
             .unwrap_or(0.0);
-        let wav_size_mb = std::fs::metadata(&wav_path)
-            .map(|m| m.len() as f64 / (1024.0 * 1024.0))
-            .unwrap_or(0.0);
         log::info!(
-            "Audio sizes — WAV: {:.1} MB, OGG/Opus: {:.1} MB (compression ratio: {:.0}x)",
-            wav_size_mb,
-            ogg_size_mb,
-            if ogg_size_mb > 0.0 { wav_size_mb / ogg_size_mb } else { 0.0 }
+            "[{}] OGG/Opus: {:.1} MB",
+            prefix, ogg_size_mb
         );
 
         Ok((ogg_path, wav_path))
@@ -280,6 +272,11 @@ impl AudioRecorder {
     /// Get the current RMS level (updated by both the monitor and recording streams).
     pub fn current_level(&self) -> f32 {
         *self.monitor_level.lock().unwrap()
+    }
+
+    /// Returns true if any audio samples have been accumulated (i.e. recording was started).
+    pub fn has_samples(&self) -> bool {
+        !self.samples.lock().unwrap().is_empty()
     }
 }
 

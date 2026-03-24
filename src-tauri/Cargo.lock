@@ -3897,6 +3897,7 @@ dependencies = [
  "anyhow",
  "audiopus",
  "audiopus_sys",
+ "base64 0.22.1",
  "chrono",
  "cpal",
  "dirs",

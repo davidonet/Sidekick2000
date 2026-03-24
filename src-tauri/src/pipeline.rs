@@ -1,5 +1,5 @@
-use crate::diarize;
 use crate::export;
+use crate::export::ImageAnnotation;
 use crate::github;
 use crate::merge;
 use crate::summarize;
@@ -30,8 +30,19 @@ pub struct PipelineConfig {
     /// Git repo root folder for committing notes (empty = no commit)
     pub working_folder: String,
     pub meeting_name: String,
-    pub ogg_path: String,
-    pub wav_path: String,
+    /// OGG path for the local mic stream (always present).
+    pub local_ogg_path: String,
+    /// Speaker name for the local stream (from settings).
+    pub local_speaker_name: String,
+    /// OGG path for the remote audio stream (empty = no remote stream).
+    #[serde(default)]
+    pub remote_ogg_path: String,
+    /// Speaker name for the remote stream (from settings).
+    #[serde(default)]
+    pub remote_speaker_name: String,
+    /// Images pasted during recording (path + timecode).
+    #[serde(default)]
+    pub image_annotations: Vec<ImageAnnotation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,10 +102,9 @@ pub async fn run(
     enable_github_issues: bool,
     app: AppHandle,
 ) -> Result<PipelineResult> {
-    let ogg_path = PathBuf::from(&config.ogg_path);
-    let wav_path = PathBuf::from(&config.wav_path);
+    let local_ogg = PathBuf::from(&config.local_ogg_path);
 
-    // Step 1: Transcribe (async API call)
+    // Step 1: Transcribe both streams in parallel
     emit_progress(&app, "transcribing", 0.0);
     let language: Option<String> = if config.language_code.is_empty() {
         None
@@ -102,37 +112,61 @@ pub async fn run(
         Some(config.language_code.clone())
     };
 
-    // Run transcription and diarization concurrently
-    let groq_key_clone = groq_key.clone();
-    let ogg_path_clone = ogg_path.clone();
-    let wav_path_clone = wav_path.clone();
-    let max_speakers = config.speakers.len().max(2);
-
-    let transcript_handle = tokio::spawn(async move {
-        transcribe::transcribe_with_groq(
-            &ogg_path_clone,
-            language.as_deref(),
-            &groq_key_clone,
-        )
-        .await
+    let groq_key_local = groq_key.clone();
+    let lang_local = language.clone();
+    let local_handle = tokio::spawn(async move {
+        transcribe::transcribe_with_groq(&local_ogg, lang_local.as_deref(), &groq_key_local).await
     });
 
-    emit_progress(&app, "diarizing", 0.15);
-    let diarize_handle = tokio::task::spawn_blocking(move || {
-        diarize::diarize(&wav_path_clone, 1, max_speakers)
-    });
+    let remote_handle = if !config.remote_ogg_path.is_empty() {
+        let remote_ogg = PathBuf::from(&config.remote_ogg_path);
+        let groq_key_remote = groq_key.clone();
+        let lang_remote = language.clone();
+        Some(tokio::spawn(async move {
+            transcribe::transcribe_with_groq(
+                &remote_ogg,
+                lang_remote.as_deref(),
+                &groq_key_remote,
+            )
+            .await
+        }))
+    } else {
+        None
+    };
 
-    let transcript = transcript_handle.await??;
-    emit_progress(&app, "diarizing", 0.30);
+    let local_transcript = local_handle.await??;
+    emit_progress(&app, "transcribing", 0.4);
 
-    let diarization = diarize_handle.await??;
-    emit_progress(&app, "merging", 0.50);
+    let remote_transcript = if let Some(handle) = remote_handle {
+        Some(handle.await??)
+    } else {
+        None
+    };
+    emit_progress(&app, "merging", 0.5);
 
-    // Step 3: Merge
-    let merged = merge::merge(&transcript.segments, &diarization);
+    // Step 2: Merge — speakers are already known, no diarization needed
+    let merged = match remote_transcript {
+        Some(remote) => merge::merge_dual_transcripts(
+            &local_transcript.segments,
+            &config.local_speaker_name,
+            &remote.segments,
+            &config.remote_speaker_name,
+        ),
+        None => local_transcript
+            .segments
+            .iter()
+            .map(|s| merge::MergedSegment {
+                speaker: config.local_speaker_name.clone(),
+                start: s.start,
+                end: s.end,
+                text: s.text.trim().to_string(),
+            })
+            .collect(),
+    };
 
-    // Step 4: Generate transcript markdown
-    let transcript_md = export::export_transcript_markdown(&merged);
+    // Step 3: Generate transcript markdown (with pasted image markers)
+    let transcript_md =
+        export::export_transcript_markdown(&merged, &config.image_annotations);
 
     // Step 5: Summarize
     let notes = if enable_summary {
@@ -197,6 +231,31 @@ pub async fn run(
     log::info!("Meeting notes saved to: {}", output_path.display());
 
     std::fs::write(&transcript_path, &transcript_md)?;
+
+    // Copy pasted images to the output dir and append a Screenshots section to both files
+    if !config.image_annotations.is_empty() {
+        let mut screenshots_md = String::from("\n\n---\n\n## Screenshots\n\n");
+        for img in &config.image_annotations {
+            let src = std::path::Path::new(&img.path);
+            if let Some(basename) = src.file_name() {
+                let dest = output_dir.join(basename);
+                if src.exists() {
+                    let _ = std::fs::copy(src, &dest);
+                }
+                let ts = export::format_timestamp(img.timecode_secs);
+                screenshots_md.push_str(&format!(
+                    "### {}\n\n![Screenshot at {}](./{}) \n\n",
+                    ts,
+                    ts,
+                    basename.to_string_lossy()
+                ));
+            }
+        }
+        // Append to notes file
+        let mut notes_content = std::fs::read_to_string(&output_path).unwrap_or_default();
+        notes_content.push_str(&screenshots_md);
+        std::fs::write(&output_path, &notes_content)?;
+    }
 
     // Step 7: Git commit (if enabled and working_folder is set)
     if enable_git_commit && !config.working_folder.is_empty() {

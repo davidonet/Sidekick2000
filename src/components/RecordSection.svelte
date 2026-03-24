@@ -4,20 +4,19 @@
   import { appState } from "../lib/state.svelte";
   import {
     listInputDevices,
-    saveInputDevice,
     startMonitoring,
     stopMonitoring,
     startRecording,
     stopRecording,
-    getAudioLevel,
+    getAudioLevels,
     getElapsed,
     runPipeline,
     onPipelineProgress,
     prepareDroppedAudio,
+    savePastedImage,
   } from "../lib/api";
   import type { PipelineConfig } from "../lib/types";
   import AudioMeter from "./AudioMeter.svelte";
-  import Select from "./Select.svelte";
 
   let pollingId: ReturnType<typeof setInterval> | null = null;
   let stopping = $state(false);
@@ -50,16 +49,20 @@
     return unlisten;
   });
 
-  // Drive monitor stream while in setup phase; restart when device changes.
+  // Drive monitor streams on both devices while in setup phase.
+  // Restarts automatically when device selection changes.
   $effect(() => {
-    const device = appState.selectedDevice;
+    const localDevice = appState.selectedDevice;
+    const remoteDevice = appState.remoteDevice;
     if (appState.phase !== "setup") return;
 
-    startMonitoring(device || undefined).catch(() => {});
+    startMonitoring(localDevice || undefined, remoteDevice || undefined).catch(() => {});
 
     const pollId = setInterval(async () => {
       try {
-        appState.audioLevel = await getAudioLevel();
+        const [local, remote] = await getAudioLevels();
+        appState.localAudioLevel = local;
+        appState.remoteAudioLevel = remote;
       } catch {
         // ignore
       }
@@ -68,16 +71,17 @@
     return () => {
       clearInterval(pollId);
       stopMonitoring().catch(() => {});
-      appState.audioLevel = 0;
+      appState.localAudioLevel = 0;
+      appState.remoteAudioLevel = 0;
     };
   });
 
   async function handleFileDrop(path: string) {
     preparingFile = path.split("/").pop() ?? path;
     try {
-      const [oggPath, wavPath] = await prepareDroppedAudio(path);
-      appState.oggPath = oggPath;
-      appState.wavPath = wavPath;
+      const [oggPath] = await prepareDroppedAudio(path);
+      appState.localOggPath = oggPath;
+      appState.remoteOggPath = "";
       preparingFile = "";
       appState.phase = "processing";
       await startPipeline();
@@ -85,6 +89,44 @@
       preparingFile = "";
       appState.errorMessage = e.toString();
       appState.phase = "error";
+    }
+  }
+
+  function formatTimecode(secs: number): string {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = Math.floor(secs % 60);
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+
+  async function handlePaste(event: ClipboardEvent) {
+    if (appState.phase !== "recording") return;
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith("image/")) {
+        event.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+        const reader = new FileReader();
+        reader.onload = async () => {
+          const dataUrl = reader.result as string;
+          const commaIdx = dataUrl.indexOf(",");
+          if (commaIdx === -1) return;
+          const header = dataUrl.slice(0, commaIdx);
+          const data = dataUrl.slice(commaIdx + 1);
+          const ext = header.includes("png") ? "png" : "jpeg";
+          const timecode = appState.elapsedSecs;
+          try {
+            const path = await savePastedImage(data, ext, timecode);
+            appState.pastedImages.push({ dataUrl, timecode, path });
+          } catch (e) {
+            console.error("Failed to save pasted image:", e);
+          }
+        };
+        reader.readAsDataURL(file);
+        break;
+      }
     }
   }
 
@@ -97,9 +139,9 @@
         pollingId = null;
       }
       try {
-        const [oggPath, wavPath] = await stopRecording();
-        appState.oggPath = oggPath;
-        appState.wavPath = wavPath;
+        const [localOgg, , remoteOgg] = await stopRecording();
+        appState.localOggPath = localOgg;
+        appState.remoteOggPath = remoteOgg;
         stopping = false;
         appState.phase = "processing";
         await startPipeline();
@@ -109,21 +151,25 @@
         appState.phase = "error";
       }
     } else {
-      // Start recording
+      // Start recording on both devices
       try {
-        await startRecording(appState.selectedDevice || undefined);
+        await startRecording(
+          appState.selectedDevice || undefined,
+          appState.remoteDevice || undefined,
+        );
         appState.phase = "recording";
         appState.elapsedSecs = 0;
-        appState.audioLevel = 0;
+        appState.localAudioLevel = 0;
+        appState.remoteAudioLevel = 0;
 
-        // Poll for audio level and elapsed time
         pollingId = setInterval(async () => {
           try {
-            const [level, elapsed] = await Promise.all([
-              getAudioLevel(),
+            const [[local, remote], elapsed] = await Promise.all([
+              getAudioLevels(),
               getElapsed(),
             ]);
-            appState.audioLevel = level;
+            appState.localAudioLevel = local;
+            appState.remoteAudioLevel = remote;
             appState.elapsedSecs = elapsed;
           } catch {
             // ignore polling errors
@@ -165,8 +211,14 @@
         github_repo: appState.githubRepo,
         output_dir: appState.outputDir,
         working_folder: appState.workingFolder,
-        ogg_path: appState.oggPath,
-        wav_path: appState.wavPath,
+        local_ogg_path: appState.localOggPath,
+        local_speaker_name: appState.localSpeakerName,
+        remote_ogg_path: appState.remoteOggPath,
+        remote_speaker_name: appState.remoteSpeakerName,
+        image_annotations: appState.pastedImages.map((img) => ({
+          path: img.path,
+          timecode_secs: img.timecode,
+        })),
       };
 
       const result = await runPipeline(config);
@@ -185,6 +237,7 @@
 <section
   class="rounded-lg p-5 border transition-colors"
   style="background: var(--surface); border-color: {isDragOver ? 'var(--accent)' : 'var(--border)'}; outline: {isDragOver ? '2px dashed var(--accent)' : 'none'}; outline-offset: -2px;"
+  onpaste={handlePaste}
 >
   <div class="flex items-center justify-between mb-4">
     <h2 class="text-lg font-semibold">Record</h2>
@@ -196,7 +249,7 @@
   </div>
 
   <div class="flex flex-col items-center gap-4">
-    <!-- Meeting name -->
+    <!-- Meeting name (setup only) -->
     {#if appState.phase === "setup"}
       <div class="w-full">
         <label class="block text-xs mb-1" style="color: var(--text-muted)">
@@ -212,24 +265,6 @@
       </div>
     {/if}
 
-    <!-- Device selector -->
-    {#if appState.phase === "setup" && appState.inputDevices.length > 0}
-      <div class="w-full">
-        <label class="block text-xs mb-1" style="color: var(--text-muted)">
-          Input device
-        </label>
-        <Select
-          bind:value={appState.selectedDevice}
-          onchange={() => saveInputDevice(appState.selectedDevice).catch(() => {})}
-        >
-          <option value="">Default</option>
-          {#each appState.inputDevices as device}
-            <option value={device}>{device}</option>
-          {/each}
-        </Select>
-      </div>
-    {/if}
-
     <!-- Record button -->
     <button
       class="w-20 h-20 rounded-full flex items-center justify-center transition-all border-0"
@@ -240,17 +275,14 @@
       disabled={stopping || (appState.phase !== "setup" && appState.phase !== "recording")}
     >
       {#if stopping}
-        <!-- Spinner -->
         <svg class="animate-spin" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5">
           <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round" />
         </svg>
       {:else if appState.phase === "recording"}
-        <!-- Stop icon -->
         <svg width="28" height="28" viewBox="0 0 24 24" fill="white">
           <rect x="6" y="6" width="12" height="12" rx="2" />
         </svg>
       {:else}
-        <!-- Mic icon -->
         <svg width="28" height="28" viewBox="0 0 24 24" fill="white">
           <path
             d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V23h2v-2.06A9 9 0 0 0 21 12v-2h-2z"
@@ -267,8 +299,35 @@
         Preparing {preparingFile}…
       </p>
     {:else if appState.phase === "setup" || appState.phase === "recording"}
-      <AudioMeter level={appState.audioLevel} />
-      {#if appState.phase === "setup"}
+      <!-- Dual VU meters -->
+      <div class="flex gap-8 justify-center">
+        <AudioMeter
+          level={appState.localAudioLevel}
+          label={appState.selectedDevice || appState.localSpeakerName}
+        />
+        <AudioMeter
+          level={appState.remoteAudioLevel}
+          label={appState.remoteDevice || appState.remoteSpeakerName}
+        />
+      </div>
+
+      {#if appState.phase === "recording"}
+        <!-- Screenshot thumbnails -->
+        {#if appState.pastedImages.length > 0}
+          <div class="w-full flex flex-wrap gap-2 mt-1">
+            {#each appState.pastedImages as img}
+              <div class="relative rounded overflow-hidden border" style="border-color: var(--border); width: 64px; height: 48px; flex-shrink: 0;">
+                <img src={img.dataUrl} alt="screenshot" class="w-full h-full object-cover" />
+                <span
+                  class="absolute bottom-0 left-0 right-0 text-center font-mono"
+                  style="font-size: 8px; background: rgba(0,0,0,0.6); color: #fff; padding: 1px 0;"
+                >{formatTimecode(img.timecode)}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+        <p class="text-xs" style="color: var(--text-muted)">⌘V to capture a screenshot</p>
+      {:else}
         {#if isDragOver}
           <p class="text-xs font-medium" style="color: var(--accent)">Drop audio file to process</p>
         {:else}

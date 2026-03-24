@@ -6,24 +6,32 @@ export async function listInputDevices(): Promise<string[]> {
   return await invoke("list_input_devices_cmd");
 }
 
-export async function startMonitoring(deviceName?: string): Promise<void> {
-  await invoke("start_monitoring", { deviceName: deviceName ?? null });
+export async function startMonitoring(localDevice?: string, remoteDevice?: string): Promise<void> {
+  await invoke("start_monitoring", {
+    localDevice: localDevice ?? null,
+    remoteDevice: remoteDevice ?? null,
+  });
 }
 
 export async function stopMonitoring(): Promise<void> {
   await invoke("stop_monitoring");
 }
 
-export async function startRecording(deviceName?: string): Promise<void> {
-  await invoke("start_recording", { deviceName: deviceName ?? null });
+export async function startRecording(localDevice?: string, remoteDevice?: string): Promise<void> {
+  await invoke("start_recording", {
+    localDevice: localDevice ?? null,
+    remoteDevice: remoteDevice ?? null,
+  });
 }
 
-export async function stopRecording(): Promise<[string, string]> {
+/** Returns [localOgg, localWav, remoteOgg, remoteWav]. Remote paths are empty if no remote stream. */
+export async function stopRecording(): Promise<[string, string, string, string]> {
   return await invoke("stop_recording");
 }
 
-export async function getAudioLevel(): Promise<number> {
-  return await invoke("get_audio_level");
+/** Returns [localLevel, remoteLevel] as RMS floats 0..1. */
+export async function getAudioLevels(): Promise<[number, number]> {
+  return await invoke("get_audio_levels");
 }
 
 export async function getElapsed(): Promise<number> {
@@ -32,6 +40,12 @@ export async function getElapsed(): Promise<number> {
 
 export async function isRecording(): Promise<boolean> {
   return await invoke("is_recording");
+}
+
+/** @deprecated Use getAudioLevels() instead. */
+export async function getAudioLevel(): Promise<number> {
+  const [local] = await getAudioLevels();
+  return local;
 }
 
 export async function runPipeline(config: PipelineConfig): Promise<PipelineResult> {
@@ -71,6 +85,14 @@ export function onPipelineProgress(
 
 export async function prepareDroppedAudio(path: string): Promise<[string, string]> {
   return await invoke("prepare_dropped_audio", { path });
+}
+
+export async function savePastedImage(
+  dataBase64: string,
+  extension: string,
+  timecodeSecs: number,
+): Promise<string> {
+  return await invoke("save_pasted_image", { dataBase64, extension, timecodeSecs });
 }
 
 export function onAudioLevel(

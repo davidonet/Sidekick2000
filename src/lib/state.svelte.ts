@@ -1,4 +1,4 @@
-import type { Speaker, AppPhase, PipelineStep, CreatedIssue, Context, Settings } from "./types";
+import type { Speaker, AppPhase, PipelineStep, CreatedIssue, Context, Settings, ImageAnnotation } from "./types";
 import { getSettings, saveSettings, getDefaultOutputDir } from "./api";
 
 export const LANGUAGES = [
@@ -34,9 +34,13 @@ class AppState {
   meetingName: string = $state("");
 
   // Recording
-  audioLevel: number = $state(0);
+  localAudioLevel: number = $state(0);
+  remoteAudioLevel: number = $state(0);
   elapsedSecs: number = $state(0);
-  selectedDevice: string = $state("");
+  selectedDevice: string = $state(""); // local mic device
+  remoteDevice: string = $state("");
+  localSpeakerName: string = $state("Local");
+  remoteSpeakerName: string = $state("Remote");
   inputDevices: string[] = $state([]);
 
   // Processing
@@ -51,8 +55,11 @@ class AppState {
   createdIssues: CreatedIssue[] = $state([]);
 
   // Recording file paths (set after stop)
-  oggPath: string = $state("");
-  wavPath: string = $state("");
+  localOggPath: string = $state("");
+  remoteOggPath: string = $state("");
+
+  // Images pasted during recording
+  pastedImages: { dataUrl: string; timecode: number; path: string }[] = $state([]);
 
   get enabledSpeakers(): Speaker[] {
     return this.speakers.filter((s) => s.enabled);
@@ -99,6 +106,9 @@ class AppState {
     this.workingFolder = s.working_folder;
     this.language = s.default_language || "fr";
     this.selectedDevice = s.default_input_device || "";
+    this.remoteDevice = s.remote_device || "";
+    this.localSpeakerName = s.local_speaker_name || "Local";
+    this.remoteSpeakerName = s.remote_speaker_name || "Remote";
     this.speakers = s.default_speakers.map((sp) => ({ ...sp, enabled: true }));
     // Select first context by default
     if (s.contexts.length > 0 && this.selectedContextId === "default") {
@@ -109,16 +119,17 @@ class AppState {
   reset() {
     this.phase = "setup";
     this.meetingName = "";
-    this.audioLevel = 0;
+    this.localAudioLevel = 0;
+    this.remoteAudioLevel = 0;
     this.elapsedSecs = 0;
-    this.selectedDevice = "";
     this.pipelineStep = "transcribing";
     this.pipelineProgress = 0;
     this.resultPath = "";
     this.errorMessage = "";
     this.createdIssues = [];
-    this.oggPath = "";
-    this.wavPath = "";
+    this.localOggPath = "";
+    this.remoteOggPath = "";
+    this.pastedImages = [];
   }
 }
 
@@ -132,6 +143,9 @@ class SettingsState {
   summarization_provider: string = $state("claude");
   together_ai_model: string = $state("meta-llama/Llama-3.3-70B-Instruct-Turbo");
   default_input_device: string = $state("");
+  local_speaker_name: string = $state("Local");
+  remote_device: string = $state("");
+  remote_speaker_name: string = $state("Remote");
   working_folder: string = $state("");
   github_repo: string = $state("");
   meetings_subfolder: string = $state("Meetings");
@@ -156,6 +170,9 @@ class SettingsState {
       this.summarization_provider = s.summarization_provider ?? "claude";
       this.together_ai_model = s.together_ai_model ?? "meta-llama/Llama-3.3-70B-Instruct-Turbo";
       this.default_input_device = s.default_input_device ?? "";
+      this.local_speaker_name = s.local_speaker_name ?? "Local";
+      this.remote_device = s.remote_device ?? "";
+      this.remote_speaker_name = s.remote_speaker_name ?? "Remote";
       this.working_folder = s.working_folder;
       this.github_repo = s.github_repo;
       this.meetings_subfolder = s.meetings_subfolder || "Meetings";
@@ -185,6 +202,9 @@ class SettingsState {
       default_speakers: this.default_speakers,
       contexts: this.contexts,
       default_input_device: this.default_input_device,
+      local_speaker_name: this.local_speaker_name,
+      remote_device: this.remote_device,
+      remote_speaker_name: this.remote_speaker_name,
       enable_summary: this.enable_summary,
       enable_git_commit: this.enable_git_commit,
       enable_github_issues: this.enable_github_issues,

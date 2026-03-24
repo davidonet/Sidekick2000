@@ -15,7 +15,10 @@ use std::sync::Mutex;
 
 /// Application state shared across commands
 struct AppState {
-    recorder: AudioRecorder,
+    /// Recorder for the local microphone.
+    local_recorder: AudioRecorder,
+    /// Recorder for the remote audio source (system audio / virtual cable).
+    remote_recorder: AudioRecorder,
     temp_dir: PathBuf,
 }
 
@@ -24,70 +27,110 @@ fn list_input_devices_cmd() -> Vec<String> {
     list_input_devices()
 }
 
+/// Start level-monitoring streams on both devices (no sample accumulation).
+/// `remote_device` may be None if no remote source is configured.
 #[tauri::command]
 async fn start_monitoring(
     state: tauri::State<'_, Mutex<AppState>>,
-    device_name: Option<String>,
+    local_device: Option<String>,
+    remote_device: Option<String>,
 ) -> Result<(), String> {
     let state = state.lock().map_err(|e| e.to_string())?;
     state
-        .recorder
-        .start_monitor(device_name)
-        .map_err(|e| format!("Failed to start monitor: {}", e))
+        .local_recorder
+        .start_monitor(local_device)
+        .map_err(|e| format!("Failed to start local monitor: {}", e))?;
+    if let Some(dev) = remote_device {
+        if !dev.is_empty() {
+            let _ = state.remote_recorder.start_monitor(Some(dev));
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
 fn stop_monitoring(state: tauri::State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().map_err(|e| e.to_string())?;
-    state.recorder.stop_monitor();
+    state.local_recorder.stop_monitor();
+    state.remote_recorder.stop_monitor();
     Ok(())
 }
 
+/// Start recording on both devices simultaneously.
 #[tauri::command]
 async fn start_recording(
     state: tauri::State<'_, Mutex<AppState>>,
-    _app: tauri::AppHandle,
-    device_name: Option<String>,
+    local_device: Option<String>,
+    remote_device: Option<String>,
 ) -> Result<(), String> {
     let state = state.lock().map_err(|e| e.to_string())?;
     state
-        .recorder
-        .start(device_name)
-        .map_err(|e| format!("Failed to start recording: {}", e))
+        .local_recorder
+        .start(local_device)
+        .map_err(|e| format!("Failed to start local recording: {}", e))?;
+    if let Some(dev) = remote_device {
+        if !dev.is_empty() {
+            state
+                .remote_recorder
+                .start(Some(dev))
+                .map_err(|e| format!("Failed to start remote recording: {}", e))?;
+        }
+    }
+    Ok(())
 }
 
+/// Stop both recorders and return (local_ogg, local_wav, remote_ogg, remote_wav).
+/// Remote paths are empty strings if no remote stream was recorded.
 #[tauri::command]
 async fn stop_recording(
     state: tauri::State<'_, Mutex<AppState>>,
-) -> Result<(String, String), String> {
+) -> Result<(String, String, String, String), String> {
     let state = state.lock().map_err(|e| e.to_string())?;
-    let (ogg_path, wav_path) = state
-        .recorder
-        .stop(&state.temp_dir)
-        .map_err(|e| format!("Failed to stop recording: {}", e))?;
+
+    let (local_ogg, local_wav) = state
+        .local_recorder
+        .stop(&state.temp_dir, "local")
+        .map_err(|e| format!("Failed to stop local recording: {}", e))?;
+
+    let (remote_ogg, remote_wav) = if state.remote_recorder.has_samples() {
+        state
+            .remote_recorder
+            .stop(&state.temp_dir, "remote")
+            .map_err(|e| format!("Failed to stop remote recording: {}", e))
+            .map(|(o, w)| (o.to_string_lossy().to_string(), w.to_string_lossy().to_string()))
+            .unwrap_or_default()
+    } else {
+        (String::new(), String::new())
+    };
 
     Ok((
-        ogg_path.to_string_lossy().to_string(),
-        wav_path.to_string_lossy().to_string(),
+        local_ogg.to_string_lossy().to_string(),
+        local_wav.to_string_lossy().to_string(),
+        remote_ogg,
+        remote_wav,
     ))
 }
 
+/// Returns current RMS levels for (local, remote) streams.
 #[tauri::command]
-async fn get_audio_level(state: tauri::State<'_, Mutex<AppState>>) -> Result<f32, String> {
+async fn get_audio_levels(state: tauri::State<'_, Mutex<AppState>>) -> Result<(f32, f32), String> {
     let state = state.lock().map_err(|e| e.to_string())?;
-    Ok(state.recorder.current_level())
+    Ok((
+        state.local_recorder.current_level(),
+        state.remote_recorder.current_level(),
+    ))
 }
 
 #[tauri::command]
 async fn get_elapsed(state: tauri::State<'_, Mutex<AppState>>) -> Result<f64, String> {
     let state = state.lock().map_err(|e| e.to_string())?;
-    Ok(state.recorder.elapsed_secs())
+    Ok(state.local_recorder.elapsed_secs())
 }
 
 #[tauri::command]
 async fn is_recording(state: tauri::State<'_, Mutex<AppState>>) -> Result<bool, String> {
     let state = state.lock().map_err(|e| e.to_string())?;
-    Ok(state.recorder.is_recording())
+    Ok(state.local_recorder.is_recording())
 }
 
 #[tauri::command]
@@ -177,6 +220,35 @@ fn save_input_device(name: String) -> Result<(), String> {
     settings::save(&s).map_err(|e| format!("Failed to save input device: {}", e))
 }
 
+/// Decode a base64-encoded image pasted from the clipboard, save it to the
+/// temp directory, and return the absolute path. `extension` should be "png"
+/// or "jpeg". `timecode_secs` is used to derive a unique filename.
+#[tauri::command]
+async fn save_pasted_image(
+    data_base64: String,
+    extension: String,
+    timecode_secs: f64,
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<String, String> {
+    use base64::{engine::general_purpose, Engine as _};
+    let bytes = general_purpose::STANDARD
+        .decode(data_base64.trim())
+        .map_err(|e| format!("Failed to decode image: {}", e))?;
+
+    let temp_dir = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        s.temp_dir.clone()
+    };
+
+    let ext = if extension.is_empty() { "png" } else { &extension };
+    let filename = format!("screenshot_{:06.0}.{}", timecode_secs, ext);
+    let path = temp_dir.join(&filename);
+    std::fs::write(&path, &bytes)
+        .map_err(|e| format!("Failed to save image: {}", e))?;
+
+    Ok(path.to_string_lossy().to_string())
+}
+
 /// Decode a dropped audio file (any format supported by symphonia) and convert
 /// it to OGG/Opus + WAV at 16 kHz mono. Returns (ogg_path, wav_path).
 #[tauri::command]
@@ -219,7 +291,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(Mutex::new(AppState {
-            recorder: AudioRecorder::new(),
+            local_recorder: AudioRecorder::new(),
+            remote_recorder: AudioRecorder::new(),
             temp_dir,
         }))
         .invoke_handler(tauri::generate_handler![
@@ -228,7 +301,7 @@ pub fn run() {
             stop_monitoring,
             start_recording,
             stop_recording,
-            get_audio_level,
+            get_audio_levels,
             get_elapsed,
             is_recording,
             run_pipeline,
@@ -237,6 +310,7 @@ pub fn run() {
             get_settings,
             save_settings,
             save_input_device,
+            save_pasted_image,
             prepare_dropped_audio,
         ])
         .run(tauri::generate_context!())

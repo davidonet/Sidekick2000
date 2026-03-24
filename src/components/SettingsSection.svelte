@@ -2,10 +2,22 @@
   import { settingsState } from "../lib/state.svelte";
   import { LANGUAGES } from "../lib/state.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { onMount } from "svelte";
   import type { Context } from "../lib/types";
   import Select from "./Select.svelte";
+  import { listInputDevices } from "../lib/api";
 
-  let activeTab: "keys" | "repo" | "contexts" | "speakers" = $state("keys");
+  let activeTab: "keys" | "devices" | "repo" | "contexts" | "speakers" = $state("keys");
+
+  let inputDevices: string[] = $state([]);
+
+  onMount(async () => {
+    try {
+      inputDevices = await listInputDevices();
+    } catch {
+      // ignore
+    }
+  });
 
   // Context editing
   let editingContextId: string | null = $state(null);
@@ -102,6 +114,7 @@
   <!-- Tab bar -->
   <div class="flex gap-1 p-3 border-b" style="border-color: var(--border)">
     <button class={tabStyle("keys")} style={activeTab === "keys" ? "background: var(--accent)" : ""} onclick={() => activeTab = "keys"}>API Keys</button>
+    <button class={tabStyle("devices")} style={activeTab === "devices" ? "background: var(--accent)" : ""} onclick={() => activeTab = "devices"}>Devices</button>
     <button class={tabStyle("repo")} style={activeTab === "repo" ? "background: var(--accent)" : ""} onclick={() => activeTab = "repo"}>Repository</button>
     <button class={tabStyle("contexts")} style={activeTab === "contexts" ? "background: var(--accent)" : ""} onclick={() => activeTab = "contexts"}>Contexts</button>
     <button class={tabStyle("speakers")} style={activeTab === "speakers" ? "background: var(--accent)" : ""} onclick={() => activeTab = "speakers"}>Speakers</button>
@@ -183,6 +196,69 @@
             <p class="text-xs mt-1 opacity-50">Any chat model available on Together.ai</p>
           </div>
         {/if}
+      </div>
+    {/if}
+
+    <!-- Devices tab -->
+    {#if activeTab === "devices"}
+      <div class="space-y-5">
+        <!-- Local microphone -->
+        <div>
+          <p class="text-sm font-semibold mb-3" style="color: var(--text)">Local Microphone</p>
+          <div class="space-y-3">
+            <div>
+              <label class="block text-sm font-medium mb-1" style="color: var(--text-muted)">Device</label>
+              <Select bind:value={settingsState.default_input_device}>
+                <option value="">Default</option>
+                {#each inputDevices as device}
+                  <option value={device}>{device}</option>
+                {/each}
+              </Select>
+              <p class="text-xs mt-1 opacity-50">Your microphone — the person running this app</p>
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-1" style="color: var(--text-muted)">Speaker Name</label>
+              <input
+                type="text"
+                class="w-full rounded-md px-3 py-2 text-sm border"
+                style="background: var(--bg); border-color: var(--border); color: var(--text)"
+                placeholder="e.g. David"
+                bind:value={settingsState.local_speaker_name}
+              />
+              <p class="text-xs mt-1 opacity-50">Used to label your speech in the transcript</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="border-t" style="border-color: var(--border)"></div>
+
+        <!-- Remote source -->
+        <div>
+          <p class="text-sm font-semibold mb-3" style="color: var(--text)">Remote Source</p>
+          <div class="space-y-3">
+            <div>
+              <label class="block text-sm font-medium mb-1" style="color: var(--text-muted)">Device</label>
+              <Select bind:value={settingsState.remote_device}>
+                <option value="">None</option>
+                {#each inputDevices as device}
+                  <option value={device}>{device}</option>
+                {/each}
+              </Select>
+              <p class="text-xs mt-1 opacity-50">System audio loopback (e.g. BlackHole, Soundflower) capturing remote participants</p>
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-1" style="color: var(--text-muted)">Speaker Name</label>
+              <input
+                type="text"
+                class="w-full rounded-md px-3 py-2 text-sm border"
+                style="background: var(--bg); border-color: var(--border); color: var(--text)"
+                placeholder="e.g. Remote"
+                bind:value={settingsState.remote_speaker_name}
+              />
+              <p class="text-xs mt-1 opacity-50">Used to label remote speech in the transcript</p>
+            </div>
+          </div>
+        </div>
       </div>
     {/if}
 
