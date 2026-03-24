@@ -68,10 +68,12 @@ fn emit_progress(app: &AppHandle, step: &str, progress: f64) {
 }
 
 /// Commit files to the working_folder git repo
-fn git_commit_notes(working_folder: &str, notes_rel: &str, transcript_rel: &str, message: &str) {
+fn git_commit_notes(working_folder: &str, paths: &[&str], message: &str) {
+    let mut args = vec!["add"];
+    args.extend_from_slice(paths);
     let add = std::process::Command::new("git")
         .current_dir(working_folder)
-        .args(["add", notes_rel, transcript_rel])
+        .args(&args)
         .output();
 
     if let Ok(o) = add {
@@ -232,19 +234,22 @@ pub async fn run(
 
     std::fs::write(&transcript_path, &transcript_md)?;
 
-    // Copy pasted images to the output dir and append a Screenshots section to both files
+    // Copy pasted images to a screenshots/ subfolder and append a Screenshots section
     if !config.image_annotations.is_empty() {
+        let screenshots_dir = output_dir.join("screenshots");
+        std::fs::create_dir_all(&screenshots_dir)?;
+
         let mut screenshots_md = String::from("\n\n---\n\n## Screenshots\n\n");
         for img in &config.image_annotations {
             let src = std::path::Path::new(&img.path);
             if let Some(basename) = src.file_name() {
-                let dest = output_dir.join(basename);
+                let dest = screenshots_dir.join(basename);
                 if src.exists() {
                     let _ = std::fs::copy(src, &dest);
                 }
                 let ts = export::format_timestamp(img.timecode_secs);
                 screenshots_md.push_str(&format!(
-                    "### {}\n\n![Screenshot at {}](./{}) \n\n",
+                    "### {}\n\n![Screenshot at {}](./screenshots/{}) \n\n",
                     ts,
                     ts,
                     basename.to_string_lossy()
@@ -281,7 +286,18 @@ pub async fn run(
         };
         let commit_msg = format!("meeting: {} {}", commit_label, date);
 
-        git_commit_notes(working_folder, &notes_rel, &transcript_rel, &commit_msg);
+        let screenshots_dir = output_dir.join("screenshots");
+        let screenshots_rel = screenshots_dir
+            .strip_prefix(working_folder)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| screenshots_dir.to_string_lossy().to_string());
+
+        let mut commit_paths: Vec<&str> = vec![&notes_rel, &transcript_rel];
+        if !config.image_annotations.is_empty() && screenshots_dir.exists() {
+            commit_paths.push(&screenshots_rel);
+        }
+
+        git_commit_notes(working_folder, &commit_paths, &commit_msg);
         log::info!("Git commit done: {}", commit_msg);
     }
 

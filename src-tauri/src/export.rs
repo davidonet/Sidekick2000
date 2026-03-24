@@ -143,7 +143,7 @@ fn render_image_annotation(img: &ImageAnnotation) -> String {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     format!(
-        "> 📸 *Screenshot at {}*\n\n![Screenshot at {}](./{}) \n\n",
+        "> 📸 *Screenshot at {}*\n\n![Screenshot at {}](./screenshots/{}) \n\n",
         ts, ts, basename
     )
 }

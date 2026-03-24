@@ -30,6 +30,11 @@
       // ignore — device list just stays empty
     }
 
+    // Document-level paste listener — section elements don't receive paste
+    // events unless focused. Listening on document works regardless of focus.
+    const onDocPaste = (e: ClipboardEvent) => handlePaste(e);
+    document.addEventListener("paste", onDocPaste);
+
     // Listen for file drops via Tauri (gives us actual file system paths)
     const webview = getCurrentWebview();
     const unlisten = await webview.onDragDropEvent(async (event) => {
@@ -46,7 +51,10 @@
       }
     });
 
-    return unlisten;
+    return () => {
+      document.removeEventListener("paste", onDocPaste);
+      unlisten();
+    };
   });
 
   // Drive monitor streams on both devices while in setup phase.
@@ -99,8 +107,41 @@
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   }
 
+  async function saveImageBlob(blob: Blob, timecode: number) {
+    const ext = blob.type.includes("png") ? "png" : "jpeg";
+    const dataUrl = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.readAsDataURL(blob);
+    });
+    const commaIdx = dataUrl.indexOf(",");
+    const data = commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+    const path = await savePastedImage(data, ext, timecode);
+    appState.pastedImages.push({ dataUrl, timecode, path });
+  }
+
   async function handlePaste(event: ClipboardEvent) {
     if (appState.phase !== "recording") return;
+    const timecode = appState.elapsedSecs;
+
+    // Primary: modern async Clipboard API — more reliable in WKWebView for
+    // images copied from native apps (screenshots, etc.)
+    try {
+      const clipboardItems = await navigator.clipboard.read();
+      for (const clipItem of clipboardItems) {
+        const imageType = clipItem.types.find((t) => t.startsWith("image/"));
+        if (imageType) {
+          event.preventDefault();
+          const blob = await clipItem.getType(imageType);
+          await saveImageBlob(blob, timecode);
+          return;
+        }
+      }
+    } catch {
+      // Clipboard API unavailable or no permission — fall through to legacy path
+    }
+
+    // Fallback: event.clipboardData.items (works for paste from web content)
     const items = event.clipboardData?.items;
     if (!items) return;
     for (const item of Array.from(items)) {
@@ -108,26 +149,27 @@
         event.preventDefault();
         const file = item.getAsFile();
         if (!file) continue;
-        const reader = new FileReader();
-        reader.onload = async () => {
-          const dataUrl = reader.result as string;
-          const commaIdx = dataUrl.indexOf(",");
-          if (commaIdx === -1) return;
-          const header = dataUrl.slice(0, commaIdx);
-          const data = dataUrl.slice(commaIdx + 1);
-          const ext = header.includes("png") ? "png" : "jpeg";
-          const timecode = appState.elapsedSecs;
-          try {
-            const path = await savePastedImage(data, ext, timecode);
-            appState.pastedImages.push({ dataUrl, timecode, path });
-          } catch (e) {
-            console.error("Failed to save pasted image:", e);
-          }
-        };
-        reader.readAsDataURL(file);
+        try {
+          await saveImageBlob(file, timecode);
+        } catch (e) {
+          console.error("Failed to save pasted image:", e);
+        }
         break;
       }
     }
+  }
+
+  async function handleCancel() {
+    if (pollingId) {
+      clearInterval(pollingId);
+      pollingId = null;
+    }
+    try {
+      await stopRecording();
+    } catch {
+      // ignore — we're discarding the audio anyway
+    }
+    appState.reset();
   }
 
   async function handleRecord() {
@@ -237,14 +279,21 @@
 <section
   class="rounded-lg p-5 border transition-colors"
   style="background: var(--surface); border-color: {isDragOver ? 'var(--accent)' : 'var(--border)'}; outline: {isDragOver ? '2px dashed var(--accent)' : 'none'}; outline-offset: -2px;"
-  onpaste={handlePaste}
 >
   <div class="flex items-center justify-between mb-4">
     <h2 class="text-lg font-semibold">Record</h2>
     {#if appState.phase === "recording"}
-      <span class="text-2xl font-mono tabular-nums" style="color: var(--text)">
-        {appState.formattedTime}
-      </span>
+      <div class="flex items-center gap-3">
+        <span class="text-2xl font-mono tabular-nums" style="color: var(--text)">
+          {appState.formattedTime}
+        </span>
+        <button
+          class="px-3 py-1 rounded text-xs font-medium cursor-pointer"
+          style="background: var(--surface-hover); color: var(--text-muted)"
+          onclick={handleCancel}
+          disabled={stopping}
+        >Cancel</button>
+      </div>
     {/if}
   </div>
 
