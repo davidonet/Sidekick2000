@@ -68,9 +68,9 @@ Launch the app and click the **gear icon** in the top-right corner. All settings
 
 | Tab | What to configure |
 |-----|-------------------|
-| **API Keys** | Groq and Anthropic API keys |
-| **Repository** | Working folder (git root), meetings subfolder, GitHub repo (`owner/repo`), default language |
-| **Contexts** | Meeting context templates — instructions that shape how Claude summarizes each meeting type |
+| **API Keys** | Groq key; summarization provider (Claude or Together.ai) and the corresponding API key/model |
+| **Repository** | Working folder (git root), meetings subfolder, GitHub repo (`owner/repo`), default language, pipeline step toggles |
+| **Contexts** | Meeting context templates — instructions that shape how the AI summarizes each meeting type |
 | **Speakers** | Default speaker list pre-loaded at startup |
 
 > API keys set in Settings take priority over environment variables. You can still use a `.env` file as fallback.
@@ -118,16 +118,16 @@ Diarize ─────────────────┘   (local speaker 
 Merge transcript + diarization
        │
        ▼
-Summarize with Claude Sonnet 4.6
+Summarize  (Claude Sonnet 4.6 or Together.ai model — skipped if disabled)
        │
        ▼
 Export  YYYY-MM-DD_HHmm_Context.md
        │
        ▼
-Git commit  (if working folder configured)
+Git commit  (if enabled and working folder configured)
        │
        ▼
-Create GitHub issues  (if repo configured)
+Create GitHub issues  (if enabled and repo configured)
 ```
 
 ---
