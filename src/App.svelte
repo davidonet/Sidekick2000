@@ -6,6 +6,7 @@
   import ProcessingSection from "./components/ProcessingSection.svelte";
   import ResultSection from "./components/ResultSection.svelte";
   import SettingsSection from "./components/SettingsSection.svelte";
+  import Logo from "./components/Logo.svelte";
 
   let showSettings = $state(false);
 
@@ -22,10 +23,7 @@
 <main class="max-w-2xl mx-auto p-8 min-h-screen">
   <header class="mb-8 flex items-center justify-between">
     <div>
-      <h1 class="text-3xl font-bold text-white">Sidekick2000</h1>
-      <p class="text-sm mt-1" style="color: var(--text-muted)">
-        Record, transcribe, and summarize meetings
-      </p>
+      <Logo />
     </div>
     <button
       class="p-2 rounded-lg cursor-pointer transition-opacity hover:opacity-80"
