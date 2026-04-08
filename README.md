@@ -8,13 +8,15 @@ Built with [Tauri](https://tauri.app) + Svelte 5 on the frontend, Rust on the ba
 
 ## What it does
 
-1. **Records** two audio streams in parallel — local mic and remote source (system audio loopback) — with live dual VU meters before and during recording
-2. **Transcribes** both streams simultaneously using [Groq Whisper](https://groq.com) (fast, multilingual)
-3. **Merges** the two transcripts into a single time-sorted conversation, each segment already labelled with the correct speaker name (no diarization needed)
+1. **Records** two audio streams in parallel — local mic and remote source (system audio via BlackHole) — with live dual VU meters
+2. **Transcribes live** both streams in real time using local [whisper.cpp](https://github.com/ggerganov/whisper.cpp) with Metal GPU acceleration — no audio leaves your machine. VAD (Silero) detects speech boundaries and feeds chunks to Whisper as you speak, so the transcript appears during the meeting.
+3. **Merges** the two transcripts into a single time-sorted conversation, each segment labelled with the correct speaker name (one stream = one speaker, no diarization needed)
 4. **Summarizes** with Claude Sonnet (Anthropic) or any [Together.ai](https://www.together.ai) chat model, using a context you define (meeting type, participants, domain vocabulary)
 5. **Exports** structured Markdown notes (`YYYY-MM-DD_HHmm_Context.md`) to a configurable folder
 6. **Commits** the notes to a git repository automatically _(optional)_
 7. **Creates GitHub issues** for every action item extracted from the notes _(optional)_
+
+> **Privacy:** All audio is processed locally on-device. Only the final text transcript is sent to the cloud for summarization (Anthropic or Together.ai). A [Groq Whisper](https://groq.com) cloud fallback is available in settings if preferred.
 
 ---
 
@@ -48,13 +50,17 @@ Action items are automatically created as GitHub issues with the `meeting-action
 
 ### Requirements
 
-- macOS (Apple Silicon or Intel)
-- [Groq API key](https://console.groq.com) — for Whisper transcription
+- macOS Apple Silicon (M1 or later — Metal GPU required for local Whisper)
+- [BlackHole 2ch](https://existential.audio/blackhole/) — virtual audio driver for capturing system audio (see [setup guide](docs/DUAL_STREAM.md))
+- `cmake` — required to build whisper.cpp (`brew install cmake`)
 - **One of** (for summarization):
   - [Anthropic API key](https://console.anthropic.com) — to use Claude Sonnet
   - [Together.ai API key](https://www.together.ai) — to use open-source models (Llama, etc.)
 - [`gh` CLI](https://cli.github.com) installed and authenticated — for GitHub issues _(optional)_
 - `git` — for committing notes _(optional)_
+- [Groq API key](https://console.groq.com) — only if using cloud transcription fallback _(optional)_
+
+> The Whisper model (`large-v3-turbo`, quantized q5_0, ~550 MB) is downloaded automatically on first launch to `~/.sidekick2000/models/`.
 
 ### Install dependencies
 
@@ -68,7 +74,7 @@ Launch the app and click the **gear icon** in the top-right corner. All settings
 
 | Tab | What to configure |
 |-----|-------------------|
-| **API Keys** | Groq key; summarization provider (Claude or Together.ai) and the corresponding API key/model |
+| **API Keys** | Transcription mode (Local Whisper or Groq); summarization provider (Claude or Together.ai) and the corresponding API key/model |
 | **Devices** | Local mic device + your speaker name; remote source device + remote speaker name |
 | **Repository** | Working folder (git root), meetings subfolder, GitHub repo (`owner/repo`), default language, pipeline step toggles |
 | **Contexts** | Meeting context templates — instructions that shape how the AI summarizes each meeting type |
@@ -108,20 +114,32 @@ Contexts are managed entirely in the Settings UI (no external files needed).
 ## Pipeline
 
 ```
-Record local mic  ─────────────────┐   (OGG/Opus, parallel)
+Record local mic  ─────────────────┐   (parallel, ring buffers)
 Record remote source ───────────────┤
                                     │
                     ┌───────────────┴───────────────┐
                     ▼                               ▼
-         Transcribe local                  Transcribe remote
-         (Groq Whisper)                    (Groq Whisper)
+           Worker thread                   Worker thread
+           (drain every 200ms)             (drain every 200ms)
+                    │                               │
+                    ▼                               ▼
+           VAD (Silero)                    VAD (Silero)
+           silence ≥ 300ms → flush         silence ≥ 300ms → flush
+                    │                               │
+                    ▼                               ▼
+           Whisper (Metal)                 Whisper (Metal)
+           whisper.cpp local               whisper.cpp local
+                    │                               │
+                    ▼                               ▼
+           emit "live-segment"             emit "live-segment"
+           → frontend display              → frontend display
                     └───────────────┬───────────────┘
                                     │
                                     ▼
                     Merge — sort by timestamp, speakers already known
                                     │
                                     ▼
-                    Summarize  (Claude Sonnet 4.6 or Together.ai — skipped if disabled)
+                    Summarize  (Claude Sonnet or Together.ai — skipped if disabled)
                                     │
                                     ▼
                     Export  YYYY-MM-DD_HHmm_Context.md
@@ -141,7 +159,8 @@ Record remote source ───────────────┤
 
 ```json
 {
-  "groq_api_key": "gsk_...",
+  "transcription_mode": "LocalWhisper",
+  "groq_api_key": "",
   "anthropic_api_key": "sk-ant-...",
   "together_ai_api_key": "",
   "summarization_provider": "claude",
@@ -179,8 +198,9 @@ Record remote source ───────────────┤
 | UI | Svelte 5, Tailwind CSS 4 |
 | Desktop shell | Tauri 2 |
 | Backend | Rust (async with Tokio) |
-| Transcription | Groq Whisper API (`whisper-large-v3-turbo`), two streams in parallel |
-| Summarization | Anthropic Claude Sonnet 4.6 or Together.ai (configurable) |
+| Transcription | Local [whisper.cpp](https://github.com/ggerganov/whisper.cpp) via `whisper-rs` (`large-v3-turbo` q5_0, Metal GPU). Groq Whisper API as optional cloud fallback. |
+| VAD | [Silero VAD](https://github.com/snakers4/silero-vad) via `voice_activity_detector` (ONNX) — detects speech/silence for live chunking |
+| Summarization | Anthropic Claude Sonnet or Together.ai (configurable) |
 | Speaker identification | Device-based — each stream has a pre-assigned speaker name |
-| Audio capture | CPAL (two simultaneous input streams) |
+| Audio capture | CPAL (two simultaneous input streams, ring buffers, shared t=0 origin) |
 | GitHub integration | `gh` CLI |
